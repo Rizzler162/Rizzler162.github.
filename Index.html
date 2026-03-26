@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>FORSAKEN - THE MALICE RACE</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; touch-action: none; font-family: 'Arial Black', sans-serif; }
+        canvas { display: block; }
+        #shield { position: absolute; inset: 0; z-index: 10000; touch-action: none; }
+        #ui-container { position: absolute; inset: 0; pointer-events: none; z-index: 500; }
+        #game-hud { position: absolute; top: 15px; left: 15px; display: none; }
+        #stat-box { display: flex; flex-direction: column; gap: 5px; padding: 10px; background: rgba(15, 15, 15, 0.95); border-radius: 4px; border: 2px solid #ff00ff; width: 230px;}
+        .hud-line { display: flex; align-items: center; gap: 10px; height: 25px; }
+        .hud-bar-container { width: 120px; height: 12px; background: #000; border: 1px solid #444; border-radius: 2px; overflow: hidden; }
+        .hud-bar-fill { height: 100%; width: 0%; transition: width 0.1s; }
+        #hud-hp-fill { background: #ff0000; width: 100%; }
+        #hud-ma-fill { background: #ff00ff; box-shadow: 0 0 10px #ff00ff; }
+        .hud-label { color: #fff; font-size: 11px; font-weight: 900; min-width: 90px; text-transform: uppercase; }
+        
+        #ability-cluster { position: absolute; bottom: 20px; right: 20px; width: 400px; display: none; flex-direction: column; gap: 10px; pointer-events: auto; }
+        .act-row { display: flex; gap: 10px; align-items: flex-end; justify-content: flex-end; }
+        .btn { height: 70px; background: #222; color: #fff; border: 2px solid #fff; border-radius: 15px; font-weight: bold; display: flex; align-items: center; justify-content: center; font-size: 14px; width: 120px; }
+        #run-btn { width: 80px; height: 80px; border-radius: 50%; border: 4px solid #ff00ff; background: #111; }
+        
+        #joy-base { position: absolute; bottom: 50px; left: 150px; width: 130px; height: 130px; border: 4px solid rgba(255,255,255,0.2); border-radius: 50%; pointer-events: none; }
+        #joy-knob { position: absolute; top: 40px; left: 40px; width: 50px; height: 50px; background: #fff; border-radius: 50%; }
+        #action-overlay { position: absolute; top: 15%; left: 50%; transform: translateX(-50%); color: #ff00ff; font-size: 36px; font-weight: 900; display: none; text-shadow: 0 0 15px #ff00ff; text-align: center;}
+    </style>
+</head>
+<body>
+
+    <div id="action-overlay">...</div>
+
+    <div id="ui-container">
+        <div id="lobby-ui" style="position:absolute; inset:0; background:rgba(0,0,0,0.8); display:flex; flex-direction:column; align-items:center; justify-content:center; color:white; pointer-events:auto; z-index:1000;">
+            <h1 style="font-size:60px; margin:0; color:#ff00ff; text-shadow: 0 0 20px #ff00ff;">FORSAKEN</h1>
+            <p style="letter-spacing:2px;">RACE TO 100 MALICE TO BECOME THE NEW KILLER</p>
+            <button onclick="startGame()" style="padding:20px 60px; font-size:28px; font-weight:bold; background:#ff00ff; color:white; border:none; border-radius:10px; cursor:pointer; margin-top:30px;">ENTER THE FOG</button>
+        </div>
+
+        <div id="game-hud">
+            <div id="stat-box">
+                <div class="hud-line"><div class="hud-bar-container"><div id="hud-hp-fill" class="hud-bar-fill"></div></div><div id="hud-hp-txt" class="hud-label">HP: 100</div></div>
+                <div class="hud-line"><div class="hud-bar-container"><div id="hud-ma-fill" class="hud-bar-fill"></div></div><div id="hud-ma-txt" class="hud-label">MALICE: 0</div></div>
+            </div>
+        </div>
+
+        <div id="ability-cluster">
+            <div class="act-row">
+                <div id="b1" class="btn">SLASH</div>
+                <div id="run-btn" class="btn">RUN</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="shield"></div>
+    <div id="joy-base"><div id="joy-knob"></div></div>
+
+    <script type="importmap"> { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } } </script>
+<script type="module">
+import * as THREE from 'three';
+
+let scene, camera, renderer, player, clock = new THREE.Clock();
+let move = { x: 0, z: 0 }, yaw = 0, pitch = 0, dist = 15;
+let hp = 100, malice = 0, isRunning = false, inLobby = true, isKiller = false;
+let touches = {}, generators = [], survivors = [], originalDoe = null;
+
+const MALICE_CAP = 100;
+
+function startGame() {
+    inLobby = false;
+    document.getElementById('lobby-ui').style.display = 'none';
+    document.getElementById('game-hud').style.display = 'block';
+    document.getElementById('ability-cluster').style.display = 'flex';
+}
+window.startGame = startGame;
+
+function init() {
+    scene = new THREE.Scene(); scene.background = new THREE.Color(0x050505);
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(1000,1000), new THREE.MeshStandardMaterial({color: 0x111111}));
+    floor.rotation.x = -Math.PI/2; scene.add(floor);
+    scene.add(new THREE.AmbientLight(0xffffff, 2.5));
+    
+    // Player
+    player = new THREE.Group();
+    const pBody = new THREE.Mesh(new THREE.BoxGeometry(2,4,1), new THREE.MeshStandardMaterial({color: 0x0000ff}));
+    pBody.position.y = 2; player.add(pBody);
+    scene.add(player);
+
+    // Original John Doe NPC
+    originalDoe = new THREE.Group();
+    const dBody = new THREE.Mesh(new THREE.BoxGeometry(2.5,4.5,1.2), new THREE.MeshStandardMaterial({color: 0x000000}));
+    dBody.position.y = 2.25; originalDoe.add(dBody);
+    originalDoe.position.set(60, 0, -60);
+    scene.add(originalDoe);
+
+    // Generators
+    for(let i=0; i<6; i++) {
+        let gen = new THREE.Mesh(new THREE.BoxGeometry(5,7,5), new THREE.MeshStandardMaterial({color: 0xaa00aa, emissive: 0xff00ff, emissiveIntensity: 0.5}));
+        gen.position.set(Math.random()*160-80, 3.5, Math.random()*160-80);
+        scene.add(gen);
+        generators.push(gen);
+    }
+
+    // AI Survivors
+    for(let i=0; i<3; i++) {
+        let s = new THREE.Group();
+        s.add(new THREE.Mesh(new THREE.BoxGeometry(2,4,1), new THREE.MeshStandardMaterial({color: 0xffff00})));
+        s.position.set(Math.random()*40-20, 2, Math.random()*40-20);
+        s.userData = { malice: 0, targetGen: generators[Math.floor(Math.random()*generators.length)], hp: 100 };
+        scene.add(s);
+        survivors.push(s);
+    }
+
+    const sh = document.getElementById('shield');
+    sh.addEventListener('touchstart', e => {
+        for(let t of e.changedTouches) {
+            if(t.clientX > window.innerWidth - 150 && t.clientY > window.innerHeight - 150) {
+                 isRunning = !isRunning;
+            } else {
+                touches[t.identifier] = { x: t.clientX, y: t.clientY, move: t.clientX < window.innerWidth/2 };
+            }
+        }
+    });
+    sh.addEventListener('touchmove', e => {
+        e.preventDefault();
+        for(let t of e.changedTouches) {
+            let d = touches[t.identifier]; if(!d) continue;
+            if(d.move) {
+                move.x = (t.clientX - 130)/60; move.z = (t.clientY - (window.innerHeight-130))/60;
+                document.getElementById('joy-knob').style.transform = `translate(${move.x*40}px, ${move.z*40}px)`;
+            } else {
+                yaw -= (t.clientX - d.x)*0.01; pitch = Math.max(-0.4, Math.min(0.4, pitch + (t.clientY - d.y)*0.01));
+                d.x = t.clientX; d.y = t.clientY;
+            }
+        }
+    });
+    sh.addEventListener('touchend', e => { for(let t of e.changedTouches) delete touches[t.identifier]; move={x:0,z:0}; });
+
+    loop();
+}
+
+function loop() {
+    requestAnimationFrame(loop);
+    let dt = clock.getDelta();
+    if(inLobby) return;
+
+    // NPC JOHN DOE LOGIC (Only active if no one is killer)
+    if(originalDoe.visible) {
+        let huntTarget = [player, ...survivors].sort((a,b) => originalDoe.position.distanceTo(a.position) - originalDoe.position.distanceTo(b.position))[0];
+        let dDir = new THREE.Vector3().subVectors(huntTarget.position, originalDoe.position).normalize();
+        originalDoe.position.addScaledVector(dDir, 18 * dt);
+        originalDoe.lookAt(huntTarget.position.x, 2, huntTarget.position.z);
+        if(originalDoe.position.distanceTo(player.position) < 6) hp -= 20 * dt;
+    }
+
+    // Generator & Malice logic
+    generators.forEach(g => {
+        if(player.position.distanceTo(g.position) < 12) {
+            malice += 8 * dt;
+            document.getElementById('action-overlay').innerText = "DRAINING MALICE...";
+            document.getElementById('action-overlay').style.display = 'block';
+        }
+        survivors.forEach(s => {
+            if(s.position.distanceTo(g.position) < 10) s.userData.malice += 6 * dt;
+        });
+    });
+
+    // Reset overlay
+    if(!generators.some(g => player.position.distanceTo(g.position) < 12)) document.getElementById('action-overlay').style.display = 'none';
+
+    // Transformation Race
+    let participants = [{obj: player, m: malice, isPlayer: true}, ...survivors.map(s => ({obj: s, m: s.userData.malice, isPlayer: false}))];
+    let top = participants.sort((a,b) => b.m - a.m)[0];
+
+    if(top.m >= MALICE_CAP && !isKiller) {
+        originalDoe.visible = false; // Banish the NPC
+        if(top.isPlayer) {
+            isKiller = true;
+            player.children[0].material.color.set(0xff0000); // Become Red Killer
+            document.getElementById('action-overlay').innerText = "YOU ARE THE KILLER - HUNT!";
+            document.getElementById('b1').innerText = "KILL";
+        } else {
+            top.obj.children[0].material.color.set(0x000000);
+            document.getElementById('action-overlay').innerText = "AN AI HAS BECOME THE KILLER!";
+        }
+        document.getElementById('action-overlay').style.display = 'block';
+    }
+
+    // AI Survivors logic
+    survivors.forEach(s => {
+        let dir = new THREE.Vector3().subVectors(s.userData.targetGen.position, s.position).normalize();
+        if(s.position.distanceTo(s.userData.targetGen.position) > 4) {
+            s.position.addScaledVector(dir, 12 * dt);
+            s.lookAt(s.userData.targetGen.position.x, 2, s.userData.targetGen.position.z);
+        }
+    });
+
+    // Player Movement
+    let speed = isRunning ? 38 : 20;
+    player.position.addScaledVector(new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), -move.z * speed * dt);
+    player.position.addScaledVector(new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw)), move.x * speed * dt);
+    player.rotation.y = yaw;
+
+    camera.position.set(player.position.x + Math.sin(yaw)*dist, player.position.y+12, player.position.z + Math.cos(yaw)*dist);
+    camera.lookAt(player.position.x, player.position.y+2, player.position.z);
+
+    // HUD Update
+    document.getElementById('hud-ma-fill').style.width = Math.min(100, (malice/MALICE_CAP*100)) + "%";
+    document.getElementById('hud-ma-txt').innerText = `MALICE: ${Math.floor(malice)}`;
+    document.getElementById('hud-hp-fill').style.width = Math.max(0, hp) + "%";
+    
+    if(hp <= 0) location.reload();
+    renderer.render(scene, camera);
+}
+init();
+</script>
+</body>
+</html>
